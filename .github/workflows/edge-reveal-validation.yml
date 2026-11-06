@@ -105,13 +105,26 @@ jobs:
             make
 
       - name: Prefetch SDL3 source
-        run: bash tools/ci/prefetch_sdl3.sh --out-dir .cache/sdl3-src
+        # Absolute: on MSYS2 the script's cygpath -m keeps a relative path
+        # relative, which CMake cannot resolve.
+        run: bash tools/ci/prefetch_sdl3.sh --out-dir "$PWD/.cache/sdl3-src"
 
       - name: Configure
         # recomp-ui is not part of this repository, so the launcher is off.
-        run: >-
-          cmake -S runtime -B build-tests -G "${{ matrix.generator }}"
-          -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DPSX_RECOMP_UI=OFF
+        # The SDL3 tree is passed explicitly, as a native absolute path
+        # (D:/… for the MINGW64 CMake), after checking it is complete.
+        run: |
+          set -euo pipefail
+          sdl3="$PWD/.cache/sdl3-src"
+          if [ ! -f "$sdl3/CMakeLists.txt" ]; then
+            echo "::error title=SDL3::no SDL3 source at $sdl3"
+            exit 1
+          fi
+          if command -v cygpath >/dev/null 2>&1; then sdl3="$(cygpath -m "$sdl3")"; fi
+          echo "SDL3 source: $sdl3"
+          cmake -S runtime -B build-tests -G "${{ matrix.generator }}" \
+            -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DPSX_RECOMP_UI=OFF \
+            -DFETCHCONTENT_SOURCE_DIR_SDL3="$sdl3"
 
       - name: Build and run tests
         run: |

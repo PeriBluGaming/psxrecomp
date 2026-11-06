@@ -1397,6 +1397,9 @@ if(BUILD_TESTING)
         src/psx_video_timing.c
         src/gpu_timeline.c)
     target_include_directories(ws_reveal_edge_exec_test PRIVATE include src)
+    if(UNIX)
+        target_link_libraries(ws_reveal_edge_exec_test PRIVATE m)
+    endif()
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(ws_reveal_edge_exec_test PRIVATE
             -ffunction-sections -fdata-sections)
