@@ -1,0 +1,239 @@
+# Linux and Windows validation for the native-wide reveal-edge quads
+# (psx_mod_tag_reveal_edge_quad).
+#
+# On each OS, builds and runs the runtime tests the change touches, on this
+# branch ("patched") and on the unpatched upstream commit it is based on
+# ("baseline"). Every test ends as passed, failed, build-failed or absent,
+# with a normalised failure signature. The compare job fails on any new
+# failure, on a failure whose signature differs from the baseline's, on an
+# expected test missing from the patched branch and on any missing result;
+# failures shared with an identical signature are listed as baseline
+# failures, never hidden. Runs on pushes to ci/edge-reveal-* test branches
+# (workflow_dispatch only works once the file is on the default branch).
+# Production code and the other workflows are untouched.
+name: Edge-reveal validation
+
+on:
+  push:
+    branches: ['ci/edge-reveal-*']
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Unpatched upstream commit to compare against
+        required: true
+        default: d9605697e25ee244fd9ea3d200c8ceb92ca1d08d
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_REF: ${{ inputs.baseline_ref || 'd9605697e25ee244fd9ea3d200c8ceb92ca1d08d' }}
+  # Target name == CTest name for each entry (runtime/CMakeLists.txt).
+  TESTS: >-
+    ws_reveal_edge_test
+    ws_reveal_edge_exec_test
+    ws_screen_mask_test
+    ws_auto_ui_untextured_exec_test
+    mod_runtime_test
+    mod_resident_test
+    netplay_view_mods_test
+    pgxp_session_test
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }}, ${{ matrix.variant }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+        variant: [patched, baseline]
+        include:
+          - os: ubuntu-24.04
+            shell: bash
+            # Unix Makefiles: the standalone runtime project registers
+            # generated/OpenBIOS_full.c both as a configure input and as a
+            # custom-command output, which Ninja rejects.
+            generator: Unix Makefiles
+          - os: windows-2022
+            shell: msys2 {0}
+            generator: MSYS Makefiles
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      # No .gitattributes upstream: keep LF so bash scripts and sources match
+      # the Linux checkout.
+      - name: Keep LF line endings (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          ref: ${{ matrix.variant == 'baseline' && env.BASELINE_REF || github.sha }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # Linux set of docs/ci/templates/game-release.yml.
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libgl1-mesa-dev libxtst-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxfixes-dev libxi-dev libxss-dev libxkbcommon-dev \
+            libasound2-dev libpulse-dev libudev-dev \
+            libvulkan-dev glslc
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          # MINGW64 GCC set of docs/ci/templates/game-release.yml, plus make
+          # for the MSYS Makefiles generator.
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-vulkan-headers
+            mingw-w64-x86_64-shaderc
+            curl
+            make
+
+      - name: Prefetch SDL3 source
+        run: bash tools/ci/prefetch_sdl3.sh --out-dir .cache/sdl3-src
+
+      - name: Configure
+        # recomp-ui is not part of this repository, so the launcher is off.
+        run: >-
+          cmake -S runtime -B build-tests -G "${{ matrix.generator }}"
+          -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DPSX_RECOMP_UI=OFF
+
+      - name: Build and run tests
+        run: |
+          set -uo pipefail
+          mkdir -p results/logs
+          # The first three diagnostic lines (the cause, e.g. the missing
+          # symbol or the rejected option, not just "linker command failed"),
+          # without workspace paths, line numbers, addresses or timings, so
+          # the same failure matches across both checkouts.
+          signature() {
+            grep -m3 -E "$2" "$1" 2>/dev/null |
+              sed -E -e "s#$(pwd -P)/##g" -e "s#$(pwd)/##g" \
+                     -e 's/:[0-9]+(:[0-9]+)?/:N/g' -e 's/0x[0-9a-fA-F]+/0xN/g' \
+                     -e 's/[0-9]+(\.[0-9]+)? sec/N sec/g' -e 's/[[:space:]]+/ /g' |
+              cut -c1-160 | paste -sd'|' -
+          }
+          if ! cmake --build build-tests --target help > results/targets.txt ||
+             ! grep -q '^\.\.\. ' results/targets.txt; then
+            echo "::error title=${{ matrix.os }} ${{ matrix.variant }}::cannot list build targets"
+            exit 1
+          fi
+          : > results/results.tsv
+          for t in $TESTS; do
+            sig=""
+            if ! grep -qE "^\.\.\. ${t}( |$)" results/targets.txt; then
+              status=absent
+            elif ! cmake --build build-tests --target "$t" --parallel 4 \
+                   > "results/logs/build-$t.log" 2>&1; then
+              status=build-failed
+              sig=$(signature "results/logs/build-$t.log" \
+                'undefined reference|[Uu]ndefined symbol|referenced from|unknown option|multiple definition|cannot find|No rule|error')
+              echo "::group::build $t"; tail -n 40 "results/logs/build-$t.log"; echo "::endgroup::"
+            elif ctest --test-dir build-tests -R "^${t}\$" --output-on-failure \
+                   > "results/logs/test-$t.log" 2>&1; then
+              status=passed
+            else
+              status=failed
+              sig=$(signature "results/logs/test-$t.log" \
+                'Assertion|assert|FAIL|error|Abort|Segmentation|Exception|Timeout|Not Run')
+              echo "::group::test $t"; tail -n 60 "results/logs/test-$t.log"; echo "::endgroup::"
+            fi
+            printf '%s\t%s\t%s\n' "$t" "$status" "${sig:--}" >> results/results.tsv
+            [ "$status" = passed ] ||
+              echo "::warning title=${{ matrix.os }} ${{ matrix.variant }}::$t $status: ${sig:--}"
+          done
+          {
+            echo "### ${{ matrix.os }} ${{ matrix.variant }}"
+            echo "| Test | Result | Signature |"; echo "|---|---|---|"
+            awk -F'\t' '{printf "| `%s` | %s | %s |\n", $1, $2, $3}' results/results.tsv
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat results/results.tsv
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.os }}-${{ matrix.variant }}
+          path: results/
+
+  compare:
+    needs: tests
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+      - name: Compare patched with baseline
+        shell: python
+        run: |
+          import os, sys
+          tests = os.environ["TESTS"].split()
+          summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          problems = []
+
+          def load(os_name, variant):
+              path = f"results-{os_name}-{variant}/results.tsv"
+              if not os.path.isfile(path):
+                  problems.append(f"{os_name}: no results from the {variant} job "
+                                  "(setup, checkout or configure failed)")
+                  return None
+              rows = {}
+              for line in open(path, encoding="utf-8"):
+                  parts = line.rstrip("\n").split("\t")
+                  if len(parts) == 3:
+                      rows[parts[0]] = (parts[1], parts[2])
+              for t in tests:
+                  if t not in rows:
+                      problems.append(f"{os_name} {variant}: no result for {t}")
+              return rows
+
+          for os_name in ("ubuntu-24.04", "windows-2022"):
+              base, patched = load(os_name, "baseline"), load(os_name, "patched")
+              if base is None or patched is None:
+                  continue
+              print(f"### {os_name}: baseline vs. patched", file=summary)
+              print("| Test | Baseline | Patched | Verdict |", file=summary)
+              print("|---|---|---|---|", file=summary)
+              for t in tests:
+                  b = base.get(t, ("missing", "-"))
+                  p = patched.get(t, ("missing", "-"))
+                  if p[0] == "passed":
+                      verdict = "ok"
+                  elif p[0] in ("absent", "missing"):
+                      verdict = "FAIL: expected test missing"
+                  elif b[0] == "passed":
+                      verdict = "FAIL: new failure"
+                  elif b[0] in ("absent", "missing"):
+                      verdict = "FAIL: new test fails"
+                  elif (b[0], b[1]) != (p[0], p[1]):
+                      verdict = "FAIL: failure differs from baseline"
+                  else:
+                      verdict = "baseline failure (same signature)"
+                  if verdict.startswith("FAIL"):
+                      problems.append(f"{os_name} {t}: {verdict[6:]}")
+                  elif verdict != "ok":
+                      print(f"::warning title={os_name}::{t}: {verdict}")
+                  print(f"| `{t}` | {b[0]}: {b[1]} | {p[0]}: {p[1]} | {verdict} |",
+                        file=summary)
+
+          for p in problems:
+              print(f"::error title=compare::{p}")
+          print(("**Result: failed** – " + str(len(problems)) + " problem(s)")
+                if problems else "**Result: no regression against the baseline**",
+                file=summary)
+          sys.exit(1 if problems else 0)
