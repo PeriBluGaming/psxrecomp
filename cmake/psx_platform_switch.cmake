@@ -14,7 +14,9 @@
 #   * SDL: devkitPro ships switch-sdl2 (static). SDL3 is not packaged for
 #     Switch homebrew, so the SDL2 backend is required.
 #   * GL: switch-mesa provides desktop GL through EGL + glapi + drm_nouveau,
-#     exported as the OpenGL::GL config package.
+#     exported as the OpenGL::GL config package. It exports no gl* symbols,
+#     so the core functions the renderers call directly are trampolines in
+#     runtime/src/gl_switch_entry.c.
 #   * No fork/exec and no dynamic loader: in-session overlay compilation is
 #     replaced by autocompile_unavailable.c; overlays run from the build-time
 #     static shard or the dirty-RAM interpreter.
@@ -84,6 +86,9 @@ function(psx_switch_adjust_sources list_var)
     set(_srcs ${${list_var}})
     list(REMOVE_ITEM _srcs "${PSXRECOMP_ROOT}/runtime/src/autocompile.c")
     list(APPEND _srcs "${PSXRECOMP_ROOT}/runtime/src/autocompile_unavailable.c")
+    # Core GL entry points resolved through eglGetProcAddress (switch-mesa
+    # exports no gl* symbols).
+    list(APPEND _srcs "${PSXRECOMP_ROOT}/runtime/src/gl_switch_entry.c")
     set(${list_var} ${_srcs} PARENT_SCOPE)
 endfunction()
 
