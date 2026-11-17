@@ -47,7 +47,11 @@ int psx_overlay_cache_name_parse(const char *name, uint32_t *region_start,
     return 1;
 }
 
-#ifndef _WIN32
+/* Hosts with a dynamic loader. Windows has its own LoadLibrary path in
+ * overlay_loader.c; Nintendo Switch (libnx) has no dynamic loader at all, so
+ * it uses the no-library branch below and runs uncovered overlays from the
+ * build-time static shard or the dirty-RAM interpreter. */
+#if !defined(_WIN32) && !defined(__SWITCH__)
 
 #include <dirent.h>
 #include <dlfcn.h>
@@ -159,7 +163,11 @@ int psx_overlay_posix_find_other_cache_tag(const char *base_dir,
 }
 void *psx_overlay_posix_library_open(const char *path, char *error,
                                      size_t error_size) {
-    (void)path; (void)error; (void)error_size;
+    (void)path;
+    if (error && error_size)
+        snprintf(error, error_size, "%s",
+                 "runtime-loaded overlay libraries are not supported on this "
+                 "platform (no dynamic loader)");
     return NULL;
 }
 void *psx_overlay_posix_library_symbol(void *handle, const char *name) {

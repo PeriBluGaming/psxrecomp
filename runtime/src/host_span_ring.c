@@ -32,7 +32,9 @@ static void proc_counters(uint32_t *faults, uint32_t *io_kb) {
 }
 #else
 #include <pthread.h>
+#ifndef __SWITCH__
 #include <sys/resource.h>
+#endif
 #include <time.h>
 static uint64_t qpc_now_us(void) {
     struct timespec ts;
@@ -41,12 +43,18 @@ static uint64_t qpc_now_us(void) {
 }
 static uint64_t this_thread_id(void) { return (uint64_t)(uintptr_t)pthread_self(); }
 static void proc_counters(uint32_t *faults, uint32_t *io_kb) {
-    struct rusage ru;
     *faults = 0; *io_kb = 0;
+#if defined(__SWITCH__)
+    /* Horizon exposes no per-process page-fault or block-I/O counters (and
+     * newlib's struct rusage has no such fields): report zero, which the span
+     * readers already treat as "no fault/I/O activity attributed". */
+#else
+    struct rusage ru;
     if (getrusage(RUSAGE_SELF, &ru) == 0) {
         *faults = (uint32_t)(ru.ru_minflt + ru.ru_majflt);
         *io_kb = (uint32_t)(ru.ru_inblock / 2);   /* 512-byte blocks */
     }
+#endif
 }
 #endif
 

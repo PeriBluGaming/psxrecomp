@@ -28,6 +28,19 @@ inline bool host_path_is_absolute(const std::filesystem::path& path) {
     if (s.size() > 2 && separator(s[0]) && separator(s[1]) && !separator(s[2]))
         return true;
 #endif
+#ifdef __SWITCH__
+    // devkitPro devoptab paths ("sdmc:/switch/x.nro", "romfs:/bios.bin") are
+    // fully qualified, but std::filesystem sees no root directory in them and
+    // fs::absolute would prepend the cwd ("sdmc:/switch/sdmc:/switch/...").
+    {
+        const auto& s = path.native();
+        const auto colon = s.find(':');
+        const auto slash = s.find('/');
+        if (colon != std::string::npos && colon > 0 &&
+            (slash == std::string::npos || colon < slash))
+            return true;
+    }
+#endif
     return path.is_absolute();
 }
 

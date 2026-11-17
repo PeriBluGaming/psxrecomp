@@ -232,7 +232,9 @@ extern "C" void psx_game_codegen_forward_if_built(int argc, char** argv);
 #else
 #include <arpa/inet.h>
 #include <fcntl.h>
-#include <ifaddrs.h>
+#ifndef __SWITCH__
+#include <ifaddrs.h>   /* Horizon/libnx has no getifaddrs; see gethostid below */
+#endif
 #include <netdb.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -15783,6 +15785,18 @@ namespace {
                 if (!inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip))) continue;
                 push(ip, label);
             }
+        }
+#elif defined(__SWITCH__)
+        /* libnx has no interface enumeration; gethostid() returns the IPv4
+         * address of the console's single active interface (nifm), in
+         * network byte order, or 0/loopback when offline. */
+        {
+            struct in_addr host{};
+            host.s_addr = (in_addr_t)gethostid();
+            char ip[64] = {};
+            if (host.s_addr != 0 &&
+                inet_ntop(AF_INET, &host, ip, sizeof(ip)))
+                push(ip, "Switch");
         }
 #else
         struct ifaddrs* ifa = nullptr;
