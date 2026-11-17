@@ -17734,7 +17734,14 @@ static void host_pause_service(void) {
     }
 }
 
+#if defined(__SWITCH__)
+#include "switch_platform.h"
+#endif
+
 int main(int argc, char** argv) {
+#if defined(__SWITCH__)
+    psx_switch_platform_init();   /* stdout/stderr -> nxlink when launched by it */
+#endif
     g_main_argc = argc;
     g_main_argv = argv;
     const int regional_result = PSXRecompV4::regional::startup(argc, argv);

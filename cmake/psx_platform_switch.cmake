@@ -89,6 +89,8 @@ function(psx_switch_adjust_sources list_var)
     # Core GL entry points resolved through eglGetProcAddress (switch-mesa
     # exports no gl* symbols).
     list(APPEND _srcs "${PSXRECOMP_ROOT}/runtime/src/gl_switch_entry.c")
+    # nxlink stdout/stderr redirection for on-console diagnostics.
+    list(APPEND _srcs "${PSXRECOMP_ROOT}/runtime/src/switch_platform.c")
     set(${list_var} ${_srcs} PARENT_SCOPE)
 endfunction()
 
