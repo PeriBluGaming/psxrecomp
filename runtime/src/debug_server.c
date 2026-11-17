@@ -110,6 +110,7 @@
 #else
 #  include <sys/socket.h>
 #  include <netinet/in.h>
+#  include <arpa/inet.h>    /* htonl/htons (POSIX; libnx declares them only here) */
 #  include <sys/time.h>     /* struct timeval — socket send/recv timeouts */
 #  include <unistd.h>
 #  include <fcntl.h>
