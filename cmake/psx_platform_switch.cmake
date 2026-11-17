@@ -29,6 +29,17 @@ endif()
 
 message(STATUS "psxrecomp: target platform = Nintendo Switch (libnx)")
 
+# ---- language level ------------------------------------------------------
+# devkitA64's GCC 16 defaults to gnu++20, where path::u8string() returns
+# std::u8string; the runtime is written against C++17 (what AppleClang, MSVC
+# and the desktop GCC/Clang builds use by default). Pin it unless the project
+# chose a standard itself.
+if(NOT DEFINED CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS ON)
+endif()
+
 # ---- option defaults (set before runtime.cmake declares the options, so
 # ---- option()/set(CACHE) keep these; an explicit -D still wins) ----------
 set(PSX_SDL_BACKEND "SDL2" CACHE STRING "SDL backend (SDL3 or SDL2)")
