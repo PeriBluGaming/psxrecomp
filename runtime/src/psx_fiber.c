@@ -34,6 +34,144 @@ psx_fiber_t psx_fiber_create(size_t stack_size, psx_fiber_entry entry, void* arg
 void psx_fiber_switch(psx_fiber_t target) { SwitchToFiber((LPVOID)target); }
 void psx_fiber_destroy(psx_fiber_t fiber) { if (fiber) DeleteFiber((LPVOID)fiber); }
 
+#elif defined(__SWITCH__) || defined(PSX_FIBER_AARCH64_ASM)
+/* Nintendo Switch (devkitA64 / libnx): newlib has no ucontext, so switch
+ * stacks with a tiny AArch64 routine. Only AAPCS64 callee-saved state needs
+ * preserving across a cooperative switch: x19-x28, fp (x29), lr (x30), sp
+ * and the low 64 bits of v8-v15 (d8-d15). */
+
+#if !defined(__aarch64__)
+#  error "psx_fiber: the AArch64 asm backend requires an AArch64 target"
+#endif
+
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+
+#define PSX_FIBER_FRAME     176u      /* 22 x 8 bytes saved, rounded to 16 */
+#define PSX_FIBER_MIN_STACK (64u * 1024u)
+
+typedef struct psx_fiber_impl {
+    void*           sp;       /* saved stack pointer while suspended */
+    void*           stack;    /* NULL for the thread-fiber */
+    psx_fiber_entry entry;
+    void*           arg;
+} psx_fiber_impl;
+
+static psx_fiber_impl* s_current = NULL;
+
+/* void psx_fiber_aarch64_swap(void** save_sp, void* load_sp) */
+void psx_fiber_aarch64_swap(void** save_sp, void* load_sp);
+/* First-run stub: x19 holds the fiber pointer (see psx_fiber_create). */
+void psx_fiber_aarch64_boot(void);
+
+__asm__(
+    ".text\n"
+    ".balign 16\n"
+    ".global psx_fiber_aarch64_swap\n"
+    ".type psx_fiber_aarch64_swap, %function\n"
+    "psx_fiber_aarch64_swap:\n"
+    "    sub  sp, sp, #176\n"
+    "    stp  x19, x20, [sp, #0]\n"
+    "    stp  x21, x22, [sp, #16]\n"
+    "    stp  x23, x24, [sp, #32]\n"
+    "    stp  x25, x26, [sp, #48]\n"
+    "    stp  x27, x28, [sp, #64]\n"
+    "    stp  x29, x30, [sp, #80]\n"
+    "    stp  d8,  d9,  [sp, #96]\n"
+    "    stp  d10, d11, [sp, #112]\n"
+    "    stp  d12, d13, [sp, #128]\n"
+    "    stp  d14, d15, [sp, #144]\n"
+    "    mov  x2, sp\n"
+    "    str  x2, [x0]\n"
+    "    mov  sp, x1\n"
+    "    ldp  x19, x20, [sp, #0]\n"
+    "    ldp  x21, x22, [sp, #16]\n"
+    "    ldp  x23, x24, [sp, #32]\n"
+    "    ldp  x25, x26, [sp, #48]\n"
+    "    ldp  x27, x28, [sp, #64]\n"
+    "    ldp  x29, x30, [sp, #80]\n"
+    "    ldp  d8,  d9,  [sp, #96]\n"
+    "    ldp  d10, d11, [sp, #112]\n"
+    "    ldp  d12, d13, [sp, #128]\n"
+    "    ldp  d14, d15, [sp, #144]\n"
+    "    add  sp, sp, #176\n"
+    "    ret\n"
+    ".size psx_fiber_aarch64_swap, .-psx_fiber_aarch64_swap\n"
+    "\n"
+    ".balign 16\n"
+    ".global psx_fiber_aarch64_boot\n"
+    ".type psx_fiber_aarch64_boot, %function\n"
+    "psx_fiber_aarch64_boot:\n"
+    "    mov  x0, x19\n"
+    "    bl   psx_fiber_aarch64_entry\n"
+    "    brk  #0\n"
+    ".size psx_fiber_aarch64_boot, .-psx_fiber_aarch64_boot\n"
+);
+
+/* Called from the boot stub on a fresh fiber stack. Not static: the asm
+ * above references it by symbol name. */
+void psx_fiber_aarch64_entry(psx_fiber_impl* f);
+void psx_fiber_aarch64_entry(psx_fiber_impl* f)
+{
+    f->entry(f->arg);
+    /* Same contract as the ucontext backend: entries never return. */
+    abort();
+}
+
+psx_fiber_t psx_fiber_convert_thread(void)
+{
+    if (!s_current) {
+        psx_fiber_impl* f = (psx_fiber_impl*)calloc(1, sizeof(*f));
+        s_current = f;            /* runs on the real thread stack */
+    }
+    return (psx_fiber_t)s_current;
+}
+
+psx_fiber_t psx_fiber_current(void) { return (psx_fiber_t)s_current; }
+
+psx_fiber_t psx_fiber_create(size_t stack_size, psx_fiber_entry entry, void* arg)
+{
+    if (stack_size < PSX_FIBER_MIN_STACK) stack_size = PSX_FIBER_MIN_STACK;
+    stack_size = (stack_size + 15u) & ~(size_t)15u;
+
+    psx_fiber_impl* f = (psx_fiber_impl*)calloc(1, sizeof(*f));
+    if (!f) return NULL;
+    f->stack = aligned_alloc(16, stack_size);
+    if (!f->stack) { free(f); return NULL; }
+    f->entry = entry;
+    f->arg   = arg;
+
+    /* Build an initial frame that psx_fiber_aarch64_swap will "restore":
+     * x19 = fiber, x29 = 0 (terminates frame-pointer unwinding),
+     * x30 = boot stub (the swap's `ret` jumps there). */
+    uintptr_t top = ((uintptr_t)f->stack + stack_size) & ~(uintptr_t)15u;
+    uint64_t* frame = (uint64_t*)(top - PSX_FIBER_FRAME);
+    memset(frame, 0, PSX_FIBER_FRAME);
+    frame[0]  = (uint64_t)(uintptr_t)f;                         /* x19 */
+    frame[10] = 0;                                              /* x29 */
+    frame[11] = (uint64_t)(uintptr_t)&psx_fiber_aarch64_boot;   /* x30 */
+    f->sp = frame;
+    return (psx_fiber_t)f;
+}
+
+void psx_fiber_switch(psx_fiber_t target)
+{
+    psx_fiber_impl* to   = (psx_fiber_impl*)target;
+    psx_fiber_impl* from = s_current;
+    if (!to || to == from) return;
+    s_current = to;
+    psx_fiber_aarch64_swap(&from->sp, to->sp);
+}
+
+void psx_fiber_destroy(psx_fiber_t fiber)
+{
+    psx_fiber_impl* f = (psx_fiber_impl*)fiber;
+    if (!f) return;
+    free(f->stack);
+    free(f);
+}
+
 #else /* POSIX: ucontext */
 
 #ifndef _XOPEN_SOURCE
