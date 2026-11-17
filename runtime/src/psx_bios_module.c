@@ -414,6 +414,11 @@ static int run_command(const char *cmd) {
     CloseHandle(pi.hProcess);
     CloseHandle(rd);
     return (int)code;
+#elif defined(__SWITCH__)
+    /* Horizon cannot spawn processes (devkitA64's libc has no popen): the
+     * command never starts, which callers already treat as failure. */
+    (void)cmd;
+    return -1;
 #else
     FILE *p = popen(cmd, "r");
     char buf[1024];

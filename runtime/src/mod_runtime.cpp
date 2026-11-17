@@ -909,6 +909,15 @@ bool run_xdelta_decode(const std::filesystem::path& executable,
         return false;
     }
     return true;
+#elif defined(__SWITCH__)
+    /* Horizon cannot spawn processes, so the trusted external xdelta3 decoder
+     * never runs here: the mod's derived disc is refused with a reason
+     * rather than activated without its patch. */
+    (void)executable; (void)source; (void)patch; (void)output;
+    if (error) *error = "derived-disc mods need the external xdelta3 decoder, "
+                        "which cannot run on Nintendo Switch (no process "
+                        "spawning); apply the patch to the disc image on a PC";
+    return false;
 #else
     const pid_t child = fork();
     if (child == 0) {

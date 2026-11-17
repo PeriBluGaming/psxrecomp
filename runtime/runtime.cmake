@@ -3044,7 +3044,10 @@ function(psxrecomp_add_game_runtime target)
     if(PSXG_CODEGEN_SETUP_INCLUDE_DIR)
         list(APPEND _psxg_inc "${PSXG_CODEGEN_SETUP_INCLUDE_DIR}")
     endif()
-    if(RECOMP_UI_ROOT)
+    # Only when the launcher is linked: main.cpp picks recomp-ui's default menu
+    # provider by __has_include, so exposing the headers with
+    # PSX_RECOMP_UI=OFF references a library that is not built.
+    if(PSX_RECOMP_UI AND RECOMP_UI_ROOT)
         list(APPEND _psxg_inc "${RECOMP_UI_ROOT}/src")
     endif()
     foreach(_psxg_t IN LISTS _psxg_targets)
