@@ -8,8 +8,8 @@
  * caches it; every call then tail-branches with the caller's arguments
  * untouched, so no per-function signature is needed.
  *
- * The list is exactly the set of gl* symbols the runtime objects leave
- * undefined. A name eglGetProcAddress cannot resolve aborts: calling on with
+ * The list is the set of gl* symbols the runtime objects leave undefined
+ * (a superset is harmless: unused trampolines are never resolved). A name eglGetProcAddress cannot resolve aborts: calling on with
  * a null function would be undefined behaviour, never a usable fallback.
  *
  * Built only on Switch (see cmake/psx_platform_switch.cmake). */
@@ -42,6 +42,7 @@ static const char* const k_psx_gl_names[] = {
     "glGenTextures",
     "glGetBooleanv",
     "glGetError",
+    "glGetFloatv",
     "glGetIntegerv",
     "glGetString",
     "glGetTexImage",
@@ -57,11 +58,12 @@ static const char* const k_psx_gl_names[] = {
     "glStencilMask",
     "glStencilOp",
     "glTexImage2D",
+    "glTexParameterf",
     "glTexParameteri",
     "glTexSubImage2D",
     "glViewport",
 };
-#define PSX_GL_ENTRY_COUNT 37
+#define PSX_GL_ENTRY_COUNT 39
 
 _Static_assert(sizeof(k_psx_gl_names) / sizeof(k_psx_gl_names[0]) == PSX_GL_ENTRY_COUNT,
                "trampoline table and name list out of sync");
@@ -149,23 +151,25 @@ PSX_GL_TRAMPOLINE(glFlush, 15);
 PSX_GL_TRAMPOLINE(glGenTextures, 16);
 PSX_GL_TRAMPOLINE(glGetBooleanv, 17);
 PSX_GL_TRAMPOLINE(glGetError, 18);
-PSX_GL_TRAMPOLINE(glGetIntegerv, 19);
-PSX_GL_TRAMPOLINE(glGetString, 20);
-PSX_GL_TRAMPOLINE(glGetTexImage, 21);
-PSX_GL_TRAMPOLINE(glGetTexLevelParameteriv, 22);
-PSX_GL_TRAMPOLINE(glGetTexParameteriv, 23);
-PSX_GL_TRAMPOLINE(glIsEnabled, 24);
-PSX_GL_TRAMPOLINE(glLineWidth, 25);
-PSX_GL_TRAMPOLINE(glPixelStorei, 26);
-PSX_GL_TRAMPOLINE(glReadBuffer, 27);
-PSX_GL_TRAMPOLINE(glReadPixels, 28);
-PSX_GL_TRAMPOLINE(glScissor, 29);
-PSX_GL_TRAMPOLINE(glStencilFunc, 30);
-PSX_GL_TRAMPOLINE(glStencilMask, 31);
-PSX_GL_TRAMPOLINE(glStencilOp, 32);
-PSX_GL_TRAMPOLINE(glTexImage2D, 33);
-PSX_GL_TRAMPOLINE(glTexParameteri, 34);
-PSX_GL_TRAMPOLINE(glTexSubImage2D, 35);
-PSX_GL_TRAMPOLINE(glViewport, 36);
+PSX_GL_TRAMPOLINE(glGetFloatv, 19);
+PSX_GL_TRAMPOLINE(glGetIntegerv, 20);
+PSX_GL_TRAMPOLINE(glGetString, 21);
+PSX_GL_TRAMPOLINE(glGetTexImage, 22);
+PSX_GL_TRAMPOLINE(glGetTexLevelParameteriv, 23);
+PSX_GL_TRAMPOLINE(glGetTexParameteriv, 24);
+PSX_GL_TRAMPOLINE(glIsEnabled, 25);
+PSX_GL_TRAMPOLINE(glLineWidth, 26);
+PSX_GL_TRAMPOLINE(glPixelStorei, 27);
+PSX_GL_TRAMPOLINE(glReadBuffer, 28);
+PSX_GL_TRAMPOLINE(glReadPixels, 29);
+PSX_GL_TRAMPOLINE(glScissor, 30);
+PSX_GL_TRAMPOLINE(glStencilFunc, 31);
+PSX_GL_TRAMPOLINE(glStencilMask, 32);
+PSX_GL_TRAMPOLINE(glStencilOp, 33);
+PSX_GL_TRAMPOLINE(glTexImage2D, 34);
+PSX_GL_TRAMPOLINE(glTexParameterf, 35);
+PSX_GL_TRAMPOLINE(glTexParameteri, 36);
+PSX_GL_TRAMPOLINE(glTexSubImage2D, 37);
+PSX_GL_TRAMPOLINE(glViewport, 38);
 
 #endif /* __SWITCH__ && __aarch64__ */

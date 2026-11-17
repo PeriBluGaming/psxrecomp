@@ -279,6 +279,14 @@ static inline int psx_sdl_cond_wait_timeout(
 
 #define PSX_SDL_WINDOW_HIGH_DENSITY SDL_WINDOW_ALLOW_HIGHDPI
 
+/* SDL3 renamed the spinlock calls; SDL_SpinLock itself kept its name. */
+#ifndef SDL_LockSpinlock
+#define SDL_LockSpinlock SDL_AtomicLock
+#endif
+#ifndef SDL_UnlockSpinlock
+#define SDL_UnlockSpinlock SDL_AtomicUnlock
+#endif
+
 static inline int psx_sdl_display_pixel_height(SDL_Window *window)
 {
     int index = window ? SDL_GetWindowDisplayIndex(window) : 0;
