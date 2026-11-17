@@ -8,6 +8,10 @@ if(NOT DEFINED PSXRECOMP_ROOT)
     get_filename_component(PSXRECOMP_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 endif()
 
+# Nintendo Switch (devkitA64/libnx): seeds platform option defaults before the
+# options below are declared. No-op on every other platform.
+include("${PSXRECOMP_ROOT}/cmake/psx_platform_switch.cmake")
+
 # The rebuild CLI configures this as `generate` for its instrumented pass and
 # `use` after it has merged the collected profile.  Keep the switch here,
 # beside the target it must affect: an otherwise unconsumed cache entry makes a
@@ -516,6 +520,9 @@ set(PSXRECOMP_RUNTIME_SOURCES
     # (sljit Tier-2 in-process JIT backend removed 2026-07-15 — was disabled by
     # default since 2026-06-25; gaps fall to the interpreter, gcc/tcc unaffected.)
 )
+if(NINTENDO_SWITCH)
+    psx_switch_adjust_sources(PSXRECOMP_RUNTIME_SOURCES)
+endif()
 # TCP `disasm` command only (debug_server.c); stripped with the rest of the TCP
 # server when PSX_DEBUG_TOOLS is OFF.
 if(PSX_DEBUG_TOOLS)
@@ -2300,6 +2307,11 @@ function(psxrecomp_add_runtime_target target)
         if(MINGW)
             target_link_libraries(${target} PRIVATE winpthread)
         endif()
+    elseif(NINTENDO_SWITCH)
+        # GL (switch-mesa), threads and .nro packaging; see
+        # cmake/psx_platform_switch.cmake. No libdl, no ucontext on Horizon.
+        psx_switch_validate_options()
+        psx_switch_finalize_target(${target} "${PSXRT_WINDOW_TITLE}")
     else()
         if(CMAKE_DL_LIBS)
             target_link_libraries(${target} PRIVATE ${CMAKE_DL_LIBS})

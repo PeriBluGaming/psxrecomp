@@ -267,6 +267,29 @@ void psx_relaunch_self(int argc, char** argv) {
     free(wline);
     free(exe);
 }
+#elif defined(__SWITCH__)
+#include <stdio.h>
+#include <string.h>
+#include <switch.h>
+/* Horizon cannot exec. Under hbloader (hbmenu / title override) the running
+ * NRO can name the NRO to load once it exits; argv is passed as one string
+ * that libnx re-splits with the same double-quote rules used here. */
+void psx_relaunch_self(int argc, char** argv) {
+    char args[2048];
+    size_t len = 0;
+    if (!argv || !argv[0] || !envHasNextLoad()) return;
+    for (int i = 0; i < argc && argv[i]; i++) {
+        int has_space = strchr(argv[i], ' ') != NULL;
+        int n = snprintf(args + len, sizeof(args) - len, "%s%s%s%s",
+                         i ? " " : "", has_space ? "\"" : "", argv[i],
+                         has_space ? "\"" : "");
+        if (n < 0 || (size_t)n >= sizeof(args) - len) return;
+        len += (size_t)n;
+    }
+    if (R_FAILED(envSetNextLoad(argv[0], args))) return;
+    fflush(NULL);
+    exit(0);   /* hbloader now starts the NRO set above */
+}
 #else
 #include <signal.h>
 #include <stdio.h>

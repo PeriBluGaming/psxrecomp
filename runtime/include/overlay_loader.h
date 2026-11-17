@@ -59,6 +59,8 @@ const struct OverlayCallbacks *overlay_loader_callbacks(void);
 #  define PSX_OVERLAY_ARCH_OS_ "win"
 #elif defined(__APPLE__)
 #  define PSX_OVERLAY_ARCH_OS_ "macos"
+#elif defined(__SWITCH__)
+#  define PSX_OVERLAY_ARCH_OS_ "switch"
 #else
 #  define PSX_OVERLAY_ARCH_OS_ "linux"
 #endif

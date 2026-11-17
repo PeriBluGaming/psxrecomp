@@ -12,6 +12,8 @@
  * glibc — must precede any system header. Harmless on Windows/macOS. */
 #ifdef __APPLE__
 #  define _DARWIN_C_SOURCE 1   /* full BSD+POSIX namespace: clock_gettime AND INADDR_LOOPBACK/timeval */
+#elif defined(__SWITCH__)
+#  define _DEFAULT_SOURCE 1    /* newlib/libnx: _POSIX_C_SOURCE alone hides INADDR_LOOPBACK (BSD namespace) */
 #elif !defined(_POSIX_C_SOURCE)
 #  define _POSIX_C_SOURCE 200809L
 #endif
