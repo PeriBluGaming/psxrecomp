@@ -25,10 +25,23 @@
 
 static int s_nxlink_fd = -1;
 
-/* Image base of this NRO (libnx linker script). The crash screen and the
- * exception handler report absolute addresses; subtracting this gives
- * offsets that addr2line resolves against the .elf. */
-extern char __start__[];
+/* Load address of this NRO. The image is position independent and the
+ * linker script's __start__ is an absolute (unrelocated) 0, so ask the
+ * kernel for the start of the code mapping that contains this file's code;
+ * the NRO's text segment is mapped first, at the image base. The crash
+ * screen and the exception handler report absolute addresses; subtracting
+ * this gives offsets that addr2line resolves against the .elf. */
+static uint64_t image_base(void)
+{
+    static uint64_t s_base;
+    if (!s_base) {
+        MemoryInfo mi;
+        u32 pi;
+        if (R_SUCCEEDED(svcQueryMemory(&mi, &pi, (u64)(uintptr_t)&image_base)))
+            s_base = mi.addr;
+    }
+    return s_base;
+}
 
 /* ---- crash report -------------------------------------------------------
  * libnx calls __libnx_exception_handler on its own stack when a thread of
@@ -48,7 +61,7 @@ static void crash_line(const char* text)
 
 static uintptr_t image_off(uint64_t addr)
 {
-    return (uintptr_t)(addr - (uint64_t)(uintptr_t)__start__);
+    return (uintptr_t)(addr - image_base());
 }
 
 void __libnx_exception_handler(ThreadExceptionDump* ctx)
@@ -57,7 +70,7 @@ void __libnx_exception_handler(ThreadExceptionDump* ctx)
     snprintf(line, sizeof(line),
              "\npsxrecomp: CRASH desc=0x%x base=%p\n"
              "  pc  +0x%lx\n  lr  +0x%lx\n  far 0x%016lx  esr 0x%08x\n",
-             ctx->error_desc, (void*)__start__,
+             ctx->error_desc, (void*)(uintptr_t)image_base(),
              (unsigned long)image_off(ctx->pc.x), (unsigned long)image_off(ctx->lr.x),
              (unsigned long)ctx->far.x, ctx->esr);
     crash_line(line);
@@ -128,7 +141,7 @@ void psx_switch_platform_init(const char* argv0)
     }
     if (!routed) return;   /* nxlink absent or its connection failed */
     fprintf(stderr, "psxrecomp: switch image base %p (crash offset = address - base)\n",
-            (void*)__start__);
+            (void*)(uintptr_t)image_base());
     fflush(stderr);
 }
 
