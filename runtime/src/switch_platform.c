@@ -136,6 +136,29 @@ void psx_switch_platform_init(const char* argv0)
  * C++ static constructors, so output routing (and the crash report) covers
  * a fault during static initialization too. main() calls the init again;
  * the second call is a no-op. */
+/* ---- default thread stack ------------------------------------------------
+ * libnx gives a pthread/std::thread created without an explicit stack size
+ * 128 KiB (newlib.c: __syscall_thread_create). The runtime's worker threads
+ * (deferred overlay init, render, present, audio, ...) are sized for desktop
+ * defaults (512 KiB macOS, 8 MiB Linux) and overflow that. The link wraps
+ * __syscall_thread_create (-Wl,--wrap, cmake/psx_platform_switch.cmake) so a
+ * request without a size gets PSX_SWITCH_THREAD_STACK; explicit sizes and
+ * caller-provided stacks pass through unchanged. */
+#define PSX_SWITCH_THREAD_STACK (4u * 1024u * 1024u)
+
+struct __pthread_t;
+int __real___syscall_thread_create(struct __pthread_t** thread, void* (*func)(void*),
+                                   void* arg, void* stack_addr, size_t stack_size);
+int __wrap___syscall_thread_create(struct __pthread_t** thread, void* (*func)(void*),
+                                   void* arg, void* stack_addr, size_t stack_size);
+int __wrap___syscall_thread_create(struct __pthread_t** thread, void* (*func)(void*),
+                                   void* arg, void* stack_addr, size_t stack_size)
+{
+    if (!stack_addr && stack_size == 0)
+        stack_size = PSX_SWITCH_THREAD_STACK;
+    return __real___syscall_thread_create(thread, func, arg, stack_addr, stack_size);
+}
+
 typedef struct {
     int (*fn)(int, char**);
     int argc;

@@ -100,6 +100,9 @@ function(psx_switch_finalize_target target title)
     find_package(OpenGL CONFIG REQUIRED)
     find_package(Threads REQUIRED)
     target_link_libraries(${target} PRIVATE OpenGL::GL Threads::Threads)
+    # Threads created without a stack size get 4 MiB instead of libnx's
+    # 128 KiB default (runtime/src/switch_platform.c).
+    target_link_options(${target} PRIVATE "-Wl,--wrap=__syscall_thread_create")
 
     if(PSX_SWITCH_APP_TITLE)
         set(_title "${PSX_SWITCH_APP_TITLE}")
