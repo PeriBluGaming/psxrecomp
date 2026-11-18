@@ -17064,7 +17064,7 @@ static void host_pause_service(void) {
 
 int main(int argc, char** argv) {
 #if defined(__SWITCH__)
-    psx_switch_platform_init();   /* stdout/stderr -> nxlink when launched by it */
+    psx_switch_platform_init(argc > 0 ? argv[0] : nullptr);   /* stdout/stderr -> nxlink / opt-in file */
 #endif
     g_main_argc = argc;
     g_main_argv = argv;
