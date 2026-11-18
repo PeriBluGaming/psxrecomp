@@ -55,18 +55,22 @@ def load_symbols(nm, elf):
 
 
 def parse_dumps(path):
-    dumps, cur = [], None
+    """Returns a list of (pc Counter, (pc, lr) Counter) per dump."""
+    dumps, cur, pairs = [], None, None
     with open(path, errors="replace") as fh:
         for line in fh:
             if "[profile-dump-begin]" in line:
-                cur = collections.Counter()
+                cur, pairs = collections.Counter(), collections.Counter()
             elif "[profile-dump-end]" in line:
                 if cur is not None:
-                    dumps.append(cur)
+                    dumps.append((cur, pairs))
                 cur = None
             elif cur is not None and line.startswith("P "):
                 _, off, cnt = line.split()
                 cur[int(off, 16)] += int(cnt)
+            elif cur is not None and line.startswith("C "):
+                _, pc, lr, cnt = line.split()
+                pairs[(int(pc, 16), int(lr, 16))] += int(cnt)
     return dumps
 
 
@@ -83,6 +87,8 @@ def main():
     ap.add_argument("elf")
     ap.add_argument("--last", type=int, default=6)
     ap.add_argument("--top", type=int, default=40)
+    ap.add_argument("--callers-of", type=int, default=12,
+                    help="show callers for the N hottest functions")
     default_nm = os.path.join(os.environ.get("DEVKITPRO", "/opt/devkitpro"),
                               "devkitA64/bin/aarch64-none-elf-nm")
     ap.add_argument("--nm", default=default_nm)
@@ -94,15 +100,21 @@ def main():
     used = dumps[-args.last:]
     addrs, names = load_symbols(args.nm, args.elf)
 
+    def fn(off):
+        i = bisect.bisect_right(addrs, off) - 1
+        return names[i] if i >= 0 else "?"
+
     per_fn, per_area = collections.Counter(), collections.Counter()
+    callers = collections.defaultdict(collections.Counter)
     total = 0
-    for dump in used:
+    for dump, pairs in used:
         for off, cnt in dump.items():
-            i = bisect.bisect_right(addrs, off) - 1
-            name = names[i] if i >= 0 else "?"
+            name = fn(off)
             per_fn[name] += cnt
             per_area[area_of(name)] += cnt
             total += cnt
+        for (pc, lr), cnt in pairs.items():
+            callers[fn(pc)][fn(lr)] += cnt
 
     print(f"{total} samples from the last {len(used)} of {len(dumps)} dumps\n")
     print("By area:")
@@ -111,6 +123,16 @@ def main():
     print(f"\nTop {args.top} functions:")
     for name, cnt in per_fn.most_common(args.top):
         print(f"  {100.0 * cnt / total:5.1f}%  {name}")
+    if callers:
+        print("\nCallers (from lr; exact for leaf functions such as memcmp/svc*):")
+        for name, cnt in per_fn.most_common(args.callers_of):
+            c = callers.get(name)
+            if not c:
+                continue
+            print(f"  {100.0 * cnt / total:5.1f}%  {name}")
+            sub = sum(c.values())
+            for caller, k in c.most_common(5):
+                print(f"           {100.0 * k / sub:5.1f}% <- {caller}")
 
 
 if __name__ == "__main__":

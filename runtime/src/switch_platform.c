@@ -321,6 +321,11 @@ static void main_thread_entry(void* arg)
 #define PROF_TOP   30
 
 static uint64_t s_prof_off[PROF_SLOTS];
+/* (pc, lr) pairs for PSX_SWITCH_PROFILE=2: the caller of a leaf function
+ * (memcmp, svc wrappers, ...) is in lr when the sample lands in it. */
+#define PROF_PAIR_SLOTS 32768u   /* power of two */
+static uint64_t s_pair_pc[PROF_PAIR_SLOTS], s_pair_lr[PROF_PAIR_SLOTS];
+static uint32_t s_pair_cnt[PROF_PAIR_SLOTS];
 static uint32_t s_prof_cnt[PROF_SLOTS];
 static uint32_t s_prof_total, s_prof_lost;
 static Handle   s_prof_target;
@@ -336,6 +341,15 @@ static void prof_add(uint64_t off)
         if (!s_prof_cnt[h]) { s_prof_off[h] = off; s_prof_cnt[h] = 1; s_prof_total++; return; }
     }
     s_prof_lost++;
+}
+
+static void prof_add_pair(uint64_t pc, uint64_t lr)
+{
+    uint32_t h = (uint32_t)(((pc >> 2) * 2654435761u) ^ ((lr >> 2) * 40503u)) & (PROF_PAIR_SLOTS - 1);
+    for (uint32_t probe = 0; probe < 64; probe++, h = (h + 1) & (PROF_PAIR_SLOTS - 1)) {
+        if (s_pair_cnt[h] && s_pair_pc[h] == pc && s_pair_lr[h] == lr) { s_pair_cnt[h]++; return; }
+        if (!s_pair_cnt[h]) { s_pair_pc[h] = pc; s_pair_lr[h] = lr; s_pair_cnt[h] = 1; return; }
+    }
 }
 
 static void prof_report(void)
@@ -373,6 +387,11 @@ static void prof_report(void)
         for (uint32_t i = 0; i < PROF_SLOTS; i++)
             if (s_prof_cnt[i])
                 fprintf(stderr, "P %lx %u\n", (unsigned long)s_prof_off[i], (unsigned)s_prof_cnt[i]);
+        for (uint32_t i = 0; i < PROF_PAIR_SLOTS; i++)
+            if (s_pair_cnt[i])
+                fprintf(stderr, "C %lx %lx %u\n", (unsigned long)s_pair_pc[i],
+                        (unsigned long)s_pair_lr[i], (unsigned)s_pair_cnt[i]);
+        memset(s_pair_cnt, 0, sizeof(s_pair_cnt));
         fprintf(stderr, "psxrecomp: [profile-dump-end]\n");
     }
     fflush(stderr);
@@ -394,7 +413,10 @@ static void prof_thread_entry(void* arg)
             ThreadContext ctx;
             const Result rc = svcGetThreadContext3(&ctx, s_prof_target);
             svcSetThreadActivity(s_prof_target, ThreadActivity_Runnable);
-            if (R_SUCCEEDED(rc)) prof_add(ctx.pc.x - base);
+            if (R_SUCCEEDED(rc)) {
+                prof_add(ctx.pc.x - base);
+                if (s_prof_full) prof_add_pair(ctx.pc.x - base, ctx.lr - base);
+            }
         }
         if (armGetSystemTick() >= next) {
             prof_report();
