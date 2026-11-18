@@ -15,6 +15,7 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include "host_path.h"   /* host_absolute: devoptab (sdmc:/) paths are absolute */
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -809,7 +810,7 @@ int hd_texture_pack_create(const char* explicit_root,
         }
 
         std::error_code ec;
-        fs::path input = fs::absolute(fs::path(selected), ec).lexically_normal();
+        fs::path input = PSXRecompV4::host_absolute(fs::path(selected), ec).lexically_normal();
         if (ec || !fs::is_directory(input, ec)) {
             write_error(error, error_capacity, "HD asset root is not a directory");
             return 0;

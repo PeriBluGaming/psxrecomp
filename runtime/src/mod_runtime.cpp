@@ -26,6 +26,7 @@
 #include "psx_sha256_file.h"
 #include "cpu_state.h"
 #include "psx_lobby_client.h"
+#include "host_path.h"   /* host_absolute: devoptab (sdmc:/) paths are absolute */
 
 extern "C" uint32_t host_launch_timing_snapshot(HostLaunchTimingEvent* out,
     uint32_t cap, uint64_t* total, uint64_t* overwritten) {
