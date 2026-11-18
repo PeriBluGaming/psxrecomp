@@ -5,7 +5,7 @@
  * PC's address in __nxlink_host; the BSD socket service is brought up and both
  * streams are redirected to that host, where nxlink prints them live. Started
  * from hbmenu (no nxlink host), nothing is opened and output stays discarded,
- * unless the user opted into the psxrecomp_stdio.txt capture file (below).
+ * An opted-in psxrecomp_stdio.txt next to the NRO takes precedence (below).
  * The image base is printed at start, and a fault prints PC/LR and the frame
  * chain as image offsets for addr2line.
  *
@@ -109,9 +109,16 @@ static int route_to_capture_file(const char* argv0)
 
 void psx_switch_platform_init(const char* argv0)
 {
-    int nxlink_tried = 0, routed = 0;
-    if (__nxlink_host.s_addr != 0) {           /* launched through nxlink */
-        nxlink_tried = 1;
+    static int s_initialized = 0;
+    if (s_initialized) return;           /* userAppInit already ran it */
+    s_initialized = 1;
+    int routed = 0;
+    /* An opted-in capture file wins: it needs no network, so it also
+     * reports problems in bringing up sockets/nxlink themselves. */
+    if (route_to_capture_file(argv0)) {
+        fprintf(stderr, "\n===== psxrecomp (switch) =====\n");
+        routed = 1;
+    } else if (__nxlink_host.s_addr != 0) {    /* launched through nxlink */
         if (R_SUCCEEDED(socketInitializeDefault())) {
             s_sockets_up = 1;
             s_nxlink_fd = nxlinkStdio();
@@ -119,13 +126,64 @@ void psx_switch_platform_init(const char* argv0)
         }
         atexit(psx_switch_platform_exit);
     }
-    if (!routed && !route_to_capture_file(argv0)) return;
-    if (nxlink_tried && !routed)
-        fprintf(stderr, "psxrecomp: nxlink host %08x set but connecting failed; "
-                        "writing to psxrecomp_stdio.txt instead\n",
-                (unsigned)__nxlink_host.s_addr);
+    if (!routed) return;   /* nxlink absent or its connection failed */
     fprintf(stderr, "psxrecomp: switch image base %p (crash offset = address - base)\n",
             (void*)__start__);
+    fflush(stderr);
+}
+
+/* libnx calls userAppInit after argv, services and sdmc are up but BEFORE
+ * C++ static constructors, so output routing (and the crash report) covers
+ * a fault during static initialization too. main() calls the init again;
+ * the second call is a no-op. */
+typedef struct {
+    int (*fn)(int, char**);
+    int argc;
+    char** argv;
+    int result;
+} main_thread_args;
+
+static void main_thread_entry(void* arg)
+{
+    main_thread_args* a = (main_thread_args*)arg;
+    a->result = a->fn(a->argc, a->argv);
+}
+
+int psx_switch_run_main(int (*fn)(int, char**), int argc, char** argv)
+{
+    main_thread_args args = { fn, argc, argv, 0 };
+    s32 prio = 0x2C;
+    Thread thread;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    Result rc = threadCreate(&thread, main_thread_entry, &args, NULL,
+                             PSX_SWITCH_MAIN_STACK, prio, -2);
+    if (R_FAILED(rc)) {
+        fprintf(stderr, "psxrecomp: cannot create the %u-byte main stack thread "
+                        "(rc=0x%x); running on the loader's stack\n",
+                PSX_SWITCH_MAIN_STACK, (unsigned)rc);
+        return fn(argc, argv);
+    }
+    fprintf(stderr, "psxrecomp: runtime main on a %u MB stack thread\n",
+            PSX_SWITCH_MAIN_STACK >> 20);
+    rc = threadStart(&thread);
+    if (R_FAILED(rc)) {
+        threadClose(&thread);
+        fprintf(stderr, "psxrecomp: cannot start the main stack thread (rc=0x%x); "
+                        "running on the loader's stack\n", (unsigned)rc);
+        return fn(argc, argv);
+    }
+    threadWaitForExit(&thread);
+    threadClose(&thread);
+    return args.result;
+}
+
+extern int __system_argc;
+extern char** __system_argv;
+
+void userAppInit(void)
+{
+    psx_switch_platform_init(__system_argc > 0 ? __system_argv[0] : NULL);
+    fprintf(stderr, "psxrecomp: userAppInit done; running static constructors\n");
     fflush(stderr);
 }
 

@@ -17060,11 +17060,21 @@ static void host_pause_service(void) {
 
 #if defined(__SWITCH__)
 #include "switch_platform.h"
-#endif
+
+/* Horizon gives homebrew the main-thread stack of the title it borrowed
+ * (often far below the 8 MB desktop default), so the runtime body runs on a
+ * dedicated thread with a desktop-sized stack; main only routes output and
+ * waits for it. */
+static int psx_runtime_main(int argc, char** argv);
 
 int main(int argc, char** argv) {
-#if defined(__SWITCH__)
     psx_switch_platform_init(argc > 0 ? argv[0] : nullptr);   /* stdout/stderr -> nxlink / opt-in file */
+    return psx_switch_run_main(psx_runtime_main, argc, argv);
+}
+
+static int psx_runtime_main(int argc, char** argv) {
+#else
+int main(int argc, char** argv) {
 #endif
     g_main_argc = argc;
     g_main_argv = argv;
