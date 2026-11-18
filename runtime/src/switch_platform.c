@@ -104,6 +104,64 @@ static void psx_switch_platform_exit(void)
     }
 }
 
+/* ---- CPU clock (opt-in) ---------------------------------------------------
+ * Homebrew inherits the 1020 MHz CPU clock of normal applications; games use
+ * up to 1785 MHz (boost mode). PSX_SWITCH_CPU_MHZ=<MHz> (e.g. via
+ * psxrecomp_env.txt) sets the CPU bus clock through clkrst (HOS 8.0+) or pcv
+ * and restores the previous rate at exit. The system may reset it on
+ * performance-mode changes (docking). */
+static u32 s_cpu_prev_hz;
+
+static Result cpu_clock_get_set(u32 set_hz, u32* out_prev_hz)
+{
+    Result rc;
+    if (hosversionAtLeast(8, 0, 0)) {
+        if (R_FAILED(rc = clkrstInitialize())) return rc;
+        ClkrstSession session;
+        if (R_SUCCEEDED(rc = clkrstOpenSession(&session, PcvModuleId_CpuBus, 3))) {
+            if (out_prev_hz) clkrstGetClockRate(&session, out_prev_hz);
+            rc = clkrstSetClockRate(&session, set_hz);
+            clkrstCloseSession(&session);
+        }
+        clkrstExit();
+    } else {
+        if (R_FAILED(rc = pcvInitialize())) return rc;
+        if (out_prev_hz) pcvGetClockRate(PcvModule_CpuBus, out_prev_hz);
+        rc = pcvSetClockRate(PcvModule_CpuBus, set_hz);
+        pcvExit();
+    }
+    return rc;
+}
+
+static void cpu_clock_restore(void)
+{
+    if (s_cpu_prev_hz) {
+        cpu_clock_get_set(s_cpu_prev_hz, NULL);
+        s_cpu_prev_hz = 0;
+    }
+}
+
+static void cpu_clock_apply(void)
+{
+    const char* e = getenv("PSX_SWITCH_CPU_MHZ");
+    if (!e || !e[0]) return;
+    const long mhz = strtol(e, NULL, 10);
+    if (mhz < 612 || mhz > 1785) {
+        fprintf(stderr, "psxrecomp: PSX_SWITCH_CPU_MHZ=%s ignored (612..1785)\n", e);
+        return;
+    }
+    u32 prev = 0;
+    const Result rc = cpu_clock_get_set((u32)mhz * 1000000u, &prev);
+    if (R_FAILED(rc)) {
+        fprintf(stderr, "psxrecomp: setting CPU clock to %ld MHz failed (rc=0x%x)\n",
+                mhz, (unsigned)rc);
+        return;
+    }
+    s_cpu_prev_hz = prev;
+    atexit(cpu_clock_restore);
+    fprintf(stderr, "psxrecomp: CPU clock %u -> %ld MHz\n", (unsigned)(prev / 1000000u), mhz);
+}
+
 /* Builds "<dir of argv0>/<name>" into out; 0 if it does not fit. */
 static int sibling_path(char* out, size_t cap, const char* argv0, const char* name)
 {
@@ -179,6 +237,7 @@ void psx_switch_platform_init(const char* argv0)
         }
         atexit(psx_switch_platform_exit);
     }
+    cpu_clock_apply();     /* reports to stderr when routed */
     if (!routed) return;   /* nxlink absent or its connection failed */
     if (env_count)
         fprintf(stderr, "psxrecomp: %d variable(s) set from psxrecomp_env.txt\n", env_count);
@@ -267,6 +326,7 @@ static uint32_t s_prof_total, s_prof_lost;
 static Handle   s_prof_target;
 static volatile int s_prof_stop;
 static Thread   s_prof_thread;
+static int      s_prof_full;
 
 static void prof_add(uint64_t off)
 {
@@ -306,6 +366,15 @@ static void prof_report(void)
                 (unsigned long)s_prof_off[k]);
     }
     fprintf(stderr, "psxrecomp: [profile] addr2line -f -C -e <exe>.elf <offsets>\n");
+    if (s_prof_full) {
+        /* PSX_SWITCH_PROFILE=2: every bin of this interval, for per-function
+         * aggregation with tools/switch_profile_report.py. */
+        fprintf(stderr, "psxrecomp: [profile-dump-begin] %u\n", (unsigned)s_prof_total);
+        for (uint32_t i = 0; i < PROF_SLOTS; i++)
+            if (s_prof_cnt[i])
+                fprintf(stderr, "P %lx %u\n", (unsigned long)s_prof_off[i], (unsigned)s_prof_cnt[i]);
+        fprintf(stderr, "psxrecomp: [profile-dump-end]\n");
+    }
     fflush(stderr);
     memset(s_prof_cnt, 0, sizeof(s_prof_cnt));
     s_prof_total = s_prof_lost = 0;
@@ -338,6 +407,7 @@ static void prof_start(Handle target)
 {
     const char* e = getenv("PSX_SWITCH_PROFILE");
     if (!e || !e[0] || e[0] == '0') return;
+    s_prof_full = e[0] == '2';
     s_prof_target = target;
     s32 prio = 0x2C;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
