@@ -104,22 +104,59 @@ static void psx_switch_platform_exit(void)
     }
 }
 
-/* Opt-in fallback when nxlink is unavailable: if the user placed a file
- * named psxrecomp_stdio.txt next to the NRO, append stdout/stderr to it.
+/* Builds "<dir of argv0>/<name>" into out; 0 if it does not fit. */
+static int sibling_path(char* out, size_t cap, const char* argv0, const char* name)
+{
+    const char* slash = argv0 ? strrchr(argv0, '/') : NULL;
+    if (!slash) return 0;
+    size_t dir_len = (size_t)(slash - argv0), name_len = strlen(name);
+    if (dir_len + 1 + name_len + 1 > cap) return 0;
+    memcpy(out, argv0, dir_len);
+    out[dir_len] = '/';
+    memcpy(out + dir_len + 1, name, name_len + 1);
+    return 1;
+}
+
+/* Opt-in capture: if the user placed a file named psxrecomp_stdio.txt next
+ * to the NRO, append stdout/stderr to it (takes precedence over nxlink).
  * Absent (the default), nothing is written anywhere. */
 static int route_to_capture_file(const char* argv0)
 {
     char path[512];
-    const char* slash = argv0 ? strrchr(argv0, '/') : NULL;
-    if (!slash) return 0;
-    size_t dir_len = (size_t)(slash - argv0);
-    if (dir_len + sizeof("/psxrecomp_stdio.txt") > sizeof(path)) return 0;
-    memcpy(path, argv0, dir_len);
-    memcpy(path + dir_len, "/psxrecomp_stdio.txt", sizeof("/psxrecomp_stdio.txt"));
+    if (!sibling_path(path, sizeof(path), argv0, "psxrecomp_stdio.txt")) return 0;
     if (access(path, F_OK) != 0) return 0;
     if (!freopen(path, "a", stdout)) return 0;
     if (!freopen(path, "a", stderr)) return 0;
     return 1;
+}
+
+/* Opt-in environment: Horizon has no shell, so the runtime's diagnostic
+ * switches (PSX_RUNTIME_PERF_DIAG, PSX_FPS_TELEMETRY, ...) are read from
+ * psxrecomp_env.txt next to the NRO when the user creates it: one NAME=VALUE
+ * per line, '#' starts a comment line. Absent, nothing changes. Returns the
+ * number of variables set (reported once output routing is up). */
+static int load_env_file(const char* argv0)
+{
+    char path[512], line[512];
+    if (!sibling_path(path, sizeof(path), argv0, "psxrecomp_env.txt")) return 0;
+    FILE* f = fopen(path, "r");
+    if (!f) return 0;
+    int count = 0;
+    while (fgets(line, sizeof(line), f)) {
+        size_t n = strlen(line);
+        while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' ||
+                     line[n - 1] == ' ' || line[n - 1] == '\t'))
+            line[--n] = '\0';
+        char* key = line;
+        while (*key == ' ' || *key == '\t') key++;
+        if (!*key || *key == '#') continue;
+        char* eq = strchr(key, '=');
+        if (!eq || eq == key) continue;
+        *eq = '\0';
+        if (setenv(key, eq + 1, 1) == 0) count++;
+    }
+    fclose(f);
+    return count;
 }
 
 void psx_switch_platform_init(const char* argv0)
@@ -128,6 +165,7 @@ void psx_switch_platform_init(const char* argv0)
     if (s_initialized) return;           /* userAppInit already ran it */
     s_initialized = 1;
     int routed = 0;
+    const int env_count = load_env_file(argv0);
     /* An opted-in capture file wins: it needs no network, so it also
      * reports problems in bringing up sockets/nxlink themselves. */
     if (route_to_capture_file(argv0)) {
@@ -142,6 +180,8 @@ void psx_switch_platform_init(const char* argv0)
         atexit(psx_switch_platform_exit);
     }
     if (!routed) return;   /* nxlink absent or its connection failed */
+    if (env_count)
+        fprintf(stderr, "psxrecomp: %d variable(s) set from psxrecomp_env.txt\n", env_count);
     fprintf(stderr, "psxrecomp: switch image base %p (crash offset = address - base)\n",
             (void*)(uintptr_t)image_base());
     fflush(stderr);
