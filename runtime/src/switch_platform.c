@@ -251,6 +251,115 @@ static void main_thread_entry(void* arg)
     a->result = a->fn(a->argc, a->argv);
 }
 
+/* ---- sampling profiler (opt-in) ------------------------------------------
+ * PSX_SWITCH_PROFILE=1 (e.g. via psxrecomp_env.txt) starts a thread that
+ * pauses the runtime main thread about every millisecond, reads its PC with
+ * svcGetThreadContext3 and resumes it. Every PSX_SWITCH_PROFILE_MS (default
+ * 10000) it prints the hottest PCs as image offsets with their share of
+ * samples, for addr2line against the .elf. The main thread is never paused
+ * while the report is printed, so stdio locks it may hold cannot deadlock. */
+#define PROF_SLOTS 16384u      /* power of two */
+#define PROF_TOP   30
+
+static uint64_t s_prof_off[PROF_SLOTS];
+static uint32_t s_prof_cnt[PROF_SLOTS];
+static uint32_t s_prof_total, s_prof_lost;
+static Handle   s_prof_target;
+static volatile int s_prof_stop;
+static Thread   s_prof_thread;
+
+static void prof_add(uint64_t off)
+{
+    uint32_t h = (uint32_t)((off >> 2) * 2654435761u) & (PROF_SLOTS - 1);
+    for (uint32_t probe = 0; probe < 64; probe++, h = (h + 1) & (PROF_SLOTS - 1)) {
+        if (s_prof_cnt[h] && s_prof_off[h] == off) { s_prof_cnt[h]++; s_prof_total++; return; }
+        if (!s_prof_cnt[h]) { s_prof_off[h] = off; s_prof_cnt[h] = 1; s_prof_total++; return; }
+    }
+    s_prof_lost++;
+}
+
+static void prof_report(void)
+{
+    uint32_t top_idx[PROF_TOP];
+    int n = 0;
+    for (uint32_t i = 0; i < PROF_SLOTS; i++) {
+        const uint32_t c = s_prof_cnt[i];
+        if (!c) continue;
+        int pos;
+        if (n < PROF_TOP) pos = n++;
+        else if (c <= s_prof_cnt[top_idx[PROF_TOP - 1]]) continue;
+        else pos = PROF_TOP - 1;
+        top_idx[pos] = i;
+        while (pos > 0 && s_prof_cnt[top_idx[pos - 1]] < c) {
+            const uint32_t t = top_idx[pos - 1];
+            top_idx[pos - 1] = top_idx[pos];
+            top_idx[pos] = t;
+            pos--;
+        }
+    }
+    fprintf(stderr, "psxrecomp: [profile] %u samples (%u unbinned); hottest PCs (image offsets):\n",
+            (unsigned)s_prof_total, (unsigned)s_prof_lost);
+    for (int i = 0; i < n; i++) {
+        uint32_t k = top_idx[i];
+        fprintf(stderr, "  %5.1f%%  +0x%lx\n",
+                s_prof_total ? 100.0 * s_prof_cnt[k] / s_prof_total : 0.0,
+                (unsigned long)s_prof_off[k]);
+    }
+    fprintf(stderr, "psxrecomp: [profile] addr2line -f -C -e <exe>.elf <offsets>\n");
+    fflush(stderr);
+    memset(s_prof_cnt, 0, sizeof(s_prof_cnt));
+    s_prof_total = s_prof_lost = 0;
+}
+
+static void prof_thread_entry(void* arg)
+{
+    (void)arg;
+    const uint64_t base = image_base();
+    uint64_t interval_ms = 10000;
+    const char* e = getenv("PSX_SWITCH_PROFILE_MS");
+    if (e && atoi(e) >= 1000) interval_ms = (uint64_t)atoi(e);
+    uint64_t next = armGetSystemTick() + armNsToTicks(interval_ms * 1000000ull);
+    while (!s_prof_stop) {
+        svcSleepThread(1000000);   /* ~1 kHz */
+        if (R_SUCCEEDED(svcSetThreadActivity(s_prof_target, ThreadActivity_Paused))) {
+            ThreadContext ctx;
+            const Result rc = svcGetThreadContext3(&ctx, s_prof_target);
+            svcSetThreadActivity(s_prof_target, ThreadActivity_Runnable);
+            if (R_SUCCEEDED(rc)) prof_add(ctx.pc.x - base);
+        }
+        if (armGetSystemTick() >= next) {
+            prof_report();
+            next = armGetSystemTick() + armNsToTicks(interval_ms * 1000000ull);
+        }
+    }
+}
+
+static void prof_start(Handle target)
+{
+    const char* e = getenv("PSX_SWITCH_PROFILE");
+    if (!e || !e[0] || e[0] == '0') return;
+    s_prof_target = target;
+    s32 prio = 0x2C;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    /* Higher priority than the sampled thread so samples are taken on time. */
+    if (R_FAILED(threadCreate(&s_prof_thread, prof_thread_entry, NULL, NULL,
+                              64 * 1024, prio > 0x18 ? prio - 1 : prio, -2)) ||
+        R_FAILED(threadStart(&s_prof_thread))) {
+        fprintf(stderr, "psxrecomp: [profile] could not start the sampler thread\n");
+        return;
+    }
+    fprintf(stderr, "psxrecomp: [profile] sampling the runtime main thread at ~1 kHz\n");
+}
+
+static void prof_stop(void)
+{
+    if (!s_prof_target) return;
+    s_prof_stop = 1;
+    threadWaitForExit(&s_prof_thread);
+    threadClose(&s_prof_thread);
+    s_prof_target = 0;
+}
+
 int psx_switch_run_main(int (*fn)(int, char**), int argc, char** argv)
 {
     main_thread_args args = { fn, argc, argv, 0 };
@@ -274,7 +383,9 @@ int psx_switch_run_main(int (*fn)(int, char**), int argc, char** argv)
                         "running on the loader's stack\n", (unsigned)rc);
         return fn(argc, argv);
     }
+    prof_start(thread.handle);
     threadWaitForExit(&thread);
+    prof_stop();
     threadClose(&thread);
     return args.result;
 }
