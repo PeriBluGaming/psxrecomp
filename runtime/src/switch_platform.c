@@ -12,12 +12,14 @@
  * Built only on Switch (see cmake/psx_platform_switch.cmake). */
 #if defined(__SWITCH__)
 
+#include <errno.h>
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <netinet/in.h>   /* struct in_addr for __nxlink_host */
 #include <switch.h>
 
@@ -170,6 +172,30 @@ int __wrap___syscall_thread_create(struct __pthread_t** thread, void* (*func)(vo
     if (!stack_addr && stack_size == 0)
         stack_size = PSX_SWITCH_THREAD_STACK;
     return __real___syscall_thread_create(thread, func, arg, stack_addr, stack_size);
+}
+
+/* ---- rename() over an existing file ---------------------------------------
+ * POSIX rename() replaces an existing target; Horizon's file system refuses
+ * it. The runtime's atomic-replace pattern (write tmp, rename over the real
+ * file: overlay captures, settings, savestates, mod receipts, and
+ * std::filesystem::rename in libstdc++) therefore failed from the second
+ * write on. The link wraps rename (-Wl,--wrap=rename) so that when the plain
+ * rename fails and both paths are regular files, the old target is removed
+ * and the rename retried. Horizon offers no atomic replace, so a crash
+ * between the two steps leaves only the complete tmp file behind. */
+int __real_rename(const char* from, const char* to);
+int __wrap_rename(const char* from, const char* to);
+int __wrap_rename(const char* from, const char* to)
+{
+    if (__real_rename(from, to) == 0) return 0;
+    const int saved = errno;
+    struct stat st_from, st_to;
+    if (stat(from, &st_from) == 0 && S_ISREG(st_from.st_mode) &&
+        stat(to, &st_to) == 0 && S_ISREG(st_to.st_mode) &&
+        remove(to) == 0)
+        return __real_rename(from, to);
+    errno = saved;
+    return -1;
 }
 
 typedef struct {

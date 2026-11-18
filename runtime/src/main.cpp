@@ -17350,7 +17350,9 @@ int main(int argc, char** argv) {
     int  player_deadzone[PSX_MAX_PLAYERS];
     int  ctrl_locked_mode[PSX_MAX_PLAYERS];
     for (int i = 0; i < PSX_MAX_PLAYERS; ++i) {
-#if defined(PSX_DEBUG_TOOLS)
+#if defined(PSX_DEBUG_TOOLS) || defined(__SWITCH__)
+        /* Switch: no keyboard, and without the launcher nothing assigns a
+         * pad, so P1 takes the first game controller (Joy-Cons/Pro). */
         player_device[i] = (i == 0) ? "auto" : "none";
 #else
         player_device[i] = (i == 0) ? "keyboard" : "none";

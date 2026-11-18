@@ -103,6 +103,8 @@ function(psx_switch_finalize_target target title)
     # Threads created without a stack size get 4 MiB instead of libnx's
     # 128 KiB default (runtime/src/switch_platform.c).
     target_link_options(${target} PRIVATE "-Wl,--wrap=__syscall_thread_create")
+    # rename() over an existing file, as POSIX requires (Horizon refuses it).
+    target_link_options(${target} PRIVATE "-Wl,--wrap=rename")
 
     if(PSX_SWITCH_APP_TITLE)
         set(_title "${PSX_SWITCH_APP_TITLE}")

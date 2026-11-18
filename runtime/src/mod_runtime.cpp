@@ -17,6 +17,7 @@
 #include "psx_sha256_file.h"
 #include "cpu_state.h"
 #include "psx_lobby_client.h"
+#include "host_path.h"   /* host_absolute: devoptab (sdmc:/) paths are absolute */
 
 extern "C" uint32_t host_launch_timing_snapshot(HostLaunchTimingEvent* out,
     uint32_t cap, uint64_t* total, uint64_t* overwritten) {
@@ -1581,7 +1582,7 @@ bool mod_runtime_initialize(const std::filesystem::path& root,
                 });
             if (resource == package->resources.end()) continue;
             std::error_code ec;
-            const auto pack = std::filesystem::absolute(
+            const auto pack = PSXRecompV4::host_absolute(
                 root / "texture-packs" / texture_game_id, ec);
             if (!ec) std::filesystem::create_directories(pack / "replacements", ec);
             if (!ec) std::filesystem::create_directories(pack / "dumps", ec);

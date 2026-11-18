@@ -15,6 +15,7 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include "host_path.h"   /* host_absolute: devoptab (sdmc:/) paths are absolute */
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -755,7 +756,7 @@ int duck_texture_pack_create(const char* root, DuckTexturePack** out, char* erro
     if (!out || !root || !root[0]) { error_text(error, capacity, "texture pack root is unset"); return 0; }
     try {
         auto p = std::make_unique<DuckTexturePack>();
-        std::error_code ec; fs::path input = fs::absolute(fs::u8path(root), ec).lexically_normal();
+        std::error_code ec; fs::path input = PSXRecompV4::host_absolute(fs::u8path(root), ec).lexically_normal();
         if (ec || (fs::exists(input, ec) && !fs::is_directory(input, ec))) {
             error_text(error, capacity, "texture pack root is not a directory"); return 0;
         }

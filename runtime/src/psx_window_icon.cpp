@@ -20,6 +20,7 @@
 #define STBI_ONLY_JPEG
 #define STBI_NO_STDIO
 #include "../third_party/stb_image.h"
+#include "host_path.h"   /* host_absolute: devoptab (sdmc:/) paths are absolute */
 
 namespace fs = std::filesystem;
 
@@ -36,12 +37,12 @@ static fs::path exe_dir_from_argv0(const char *argv0)
     if (exe_dir.empty()) {
         const char *appimg = std::getenv("APPIMAGE");
         if (appimg && appimg[0]) {
-            exe_dir = fs::absolute(appimg, ec).parent_path();
+            exe_dir = PSXRecompV4::host_absolute(appimg, ec).parent_path();
             if (ec) exe_dir.clear();
         }
     }
     if (exe_dir.empty() && argv0 && argv0[0]) {
-        exe_dir = fs::absolute(argv0, ec).parent_path();
+        exe_dir = PSXRecompV4::host_absolute(argv0, ec).parent_path();
         if (ec) exe_dir.clear();
     }
     if (exe_dir.empty()) {
