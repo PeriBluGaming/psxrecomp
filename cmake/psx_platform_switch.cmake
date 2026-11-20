@@ -42,6 +42,27 @@ if(NOT DEFINED CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_EXTENSIONS ON)
 endif()
 
+# ---- code generation -------------------------------------------------------
+# Measured on hardware: the emulation thread is CPU-bound, with the cycle
+# bookkeeping inlined per emulated instruction dominating the profile.
+option(PSX_SWITCH_HIDDEN_VISIBILITY
+    "Force hidden visibility so -fPIE code reaches globals without the GOT" ON)
+if(PSX_SWITCH_HIDDEN_VISIBILITY)
+    add_compile_options(
+        "$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-include ${PSXRECOMP_ROOT}/runtime/include/psx_switch_visibility.h>")
+endif()
+# devkitPro's toolchain uses -O2 for Release; desktop Release builds use -O3.
+set(PSX_SWITCH_OPT_LEVEL "O3" CACHE STRING "Release optimisation level on Switch (O2 or O3)")
+set_property(CACHE PSX_SWITCH_OPT_LEVEL PROPERTY STRINGS O2 O3)
+foreach(_lang C CXX)
+    string(REGEX REPLACE "-O[0-9s]" "-${PSX_SWITCH_OPT_LEVEL}"
+           CMAKE_${_lang}_FLAGS_RELEASE "${CMAKE_${_lang}_FLAGS_RELEASE}")
+    if(NOT CMAKE_${_lang}_FLAGS_RELEASE MATCHES "-O[0-9s]")
+        string(APPEND CMAKE_${_lang}_FLAGS_RELEASE " -${PSX_SWITCH_OPT_LEVEL}")
+    endif()
+endforeach()
+message(STATUS "psxrecomp: Switch codegen -${PSX_SWITCH_OPT_LEVEL}, hidden visibility ${PSX_SWITCH_HIDDEN_VISIBILITY}")
+
 # ---- option defaults (set before runtime.cmake declares the options, so
 # ---- option()/set(CACHE) keep these; an explicit -D still wins) ----------
 set(PSX_SDL_BACKEND "SDL2" CACHE STRING "SDL backend (SDL3 or SDL2)")
